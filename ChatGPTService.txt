@@ -1,0 +1,92 @@
+/*
+  Author : Priyansh Uttamchandani
+  Description : To automate user related question replies from chat GPT as comment on Chatter Post
+  Date : 5/1/2024
+*/
+public with sharing class ChatGPTService {
+    private static final String API_KEY = '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'; // Replace with your actual API key
+    private static final String ENDPOINT_URL = 'https://api.openai.com/v1/chat/completions';
+
+    
+    // @description Method to generate response from ChatGPT
+    @future(callout=true)
+    public static void generateResponse(Set<String> chatterIds,String objectName) {
+        Map<String,String> chatterDataMap = new Map<String,String>();
+        String sampleMessage = '';
+        if(ObjectName != 'FeedItem'){
+            System.debug('reached for feed comment');
+            for(FeedComment ct : [SELECT Id, FeedItemId, CommentBody FROM FeedComment WHERE FeedItemId IN :chatterIds]){  
+                System.debug('reached for feed comment '+ct);
+                if(chatterDataMap.containsKey(ct.FeedItemId)){
+                    String feedComment = chatterDataMap.get(ct.FeedItemId);
+                    feedComment +=  ct.CommentBody + ' /n ';
+                    chatterDataMap.put(ct.FeedItemId,feedComment);
+                }
+                else{
+                   chatterDataMap.put(ct.FeedItemId,ct.CommentBody + ' /n ');
+                }
+            }
+        }
+        
+        for(FeedItem chatter : [SELECT Id,Body FROM FeedItem WHERE Id IN :chatterIds]){
+            if(chatterDataMap.containsKey(chatter.Id)){
+                String chatterContent = chatter.Body + ' /n ';
+                chatterContent += chatterDataMap.get(chatter.Id);
+                chatterContent = chatterContent.replaceAll('<p>','');
+                chatterContent = chatterContent.replaceAll('</p>','');
+                chatterDataMap.put(chatter.Id,chatterContent);
+            }else{
+                chatterDataMap.put(chatter.Id,chatter.Body);
+            }
+        }
+        System.debug('chatterDataMap '+chatterDataMap);
+        for(String ctId : chatterDataMap.keySet()){
+            String textMessage = chatterDataMap.get(ctId);
+            System.debug('textMessage '+textMessage);
+            
+            HttpRequest req = new HttpRequest();
+            req.setEndpoint(ENDPOINT_URL);
+            req.setMethod('POST');
+            req.setTimeout(1000*120);
+            req.setHeader('Content-Type', 'application/json');
+            req.setHeader('Authorization', 'Bearer ' + API_KEY); // Add the API key to the request header
+            
+            // Set the request body
+            
+            Map<String, Object> PromptBody = new Map<String, Object>();
+            PromptBody.put('role','user');
+            PromptBody.put('content',textMessage);
+            
+            List<Object> lstPrompts = new List<Object>();
+            lstPrompts.add(PromptBody);
+            
+            Map<String, Object> requestBody = new Map<String, Object>();
+            requestBody.put('messages', lstPrompts);
+            requestBody.put('model', 'gpt-3.5-turbo');
+            
+            System.debug('Request Body before: ' + req.getBody());
+            req.setBody(JSON.serialize(requestBody));
+            System.debug('Request Body: ' + req.getBody());
+            
+            Http http = new Http();
+            HttpResponse res = http.send(req);
+            
+            if (res.getStatusCode() == 200) {
+                System.debug(res.getBody());
+                Map<String, Object> responseBody = (Map<String, Object>)JSON.deserializeUntyped(res.getBody());
+                List<Object> choices = (List<Object>)responseBody.get('choices');
+                if (choices.size() > 0) {
+                    Map<String, Object> choice = (Map<String, Object>)choices.get(0);
+                    Map<String,Object> mpMessages = (Map<String,Object>)choice.get('message');
+                    String responseText = (String)mpMessages.get('content');
+                    responseText = responseText != null ? responseText.trim() : '';
+                    System.debug('Response Text FROM ChatGPT : ' + responseText);
+                    ConnectApi.Comment comment = ConnectApi.ChatterFeeds.postCommentToFeedElement(null, ctId,responseText);
+                }
+            }
+        
+        }       
+            
+    }
+
+}
